@@ -1,33 +1,70 @@
-# OpenAI Chat API Conversation Demo
+# AI Weather Assistant Using OpenAI Function Calling
 
-This project demonstrates how to use the OpenAI Chat API in Python and highlights the difference between:
+This project demonstrates how to use OpenAI Function Calling to connect an AI model with external APIs.
 
-1. Sending independent prompts (stateless requests)
-2. Sending multiple messages as conversation history (stateful conversation)
+The application allows the model to:
 
-## Prerequisites
+1. Understand a user's weather-related question.
+2. Determine when a weather function should be called.
+3. Extract the city name from the user request.
+4. Fetch real weather information using external APIs.
+5. Generate a natural language response based on live weather data.
+
+---
+
+# Architecture
+
+```text
+User Question
+      |
+      V
+OpenAI Model
+      |
+      | Function Call Request
+      V
+get_current_weather()
+      |
+      +--> OpenStreetMap API
+      |       |
+      |       +--> Latitude & Longitude
+      |
+      +--> Meteosource Weather API
+              |
+              +--> Current Weather Data
+                      |
+                      V
+               OpenAI Model
+                      |
+                      V
+              Human-Friendly Response
+```
+
+---
+
+# Prerequisites
 
 - Python 3.8+
-- OpenAI Python SDK
-- python-dotenv
+- OpenAI SDK
+- Requests
+- Python Dotenv
 
-## Installation
-
-Install the required packages:
+Install dependencies:
 
 ```bash
-pip install openai python-dotenv pandas prompt_toolkit
+pip install openai requests python-dotenv
 ```
 
-## Environment Setup
+---
 
-Create a `.env` file in the project root:
+# Environment Setup
+
+Create a `.env` file:
 
 ```env
-OPENAI_API_KEY=your_api_key_here
+OPENAI_API_KEY=your_openai_api_key
 ```
 
-Load the API key:
+Load the environment variable:
 
 ```python
 from dotenv import load_dotenv
@@ -38,179 +75,348 @@ load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 ```
 
-## Verify Setup
+---
+
+# Step 1: Convert City Name to Coordinates
+
+The project uses OpenStreetMap's Nominatim API.
 
 ```python
-print("hello")
+def get_coordinates(city):
+```
+
+Example:
+
+```python
+lat, lon = get_coordinates("Lucknow")
 ```
 
 Output:
 
 ```text
-hello
-```
-
-Check whether the API key is loaded:
-
-```python
-print(openai.api_key)
-```
-
-## Example 1: Single Prompt
-
-```python
-prompt = "hello, how are you?"
-
-response = openai.ChatCompletion.create(
-    model="gpt-4o-mini",
-    messages=[
-        {"role": "user", "content": prompt}
-    ],
-    temperature=0.7,
-    max_tokens=45
-)
-
-print(response["choices"][0]["message"]["content"])
-```
-
-### Sample Output
-
-```text
-Hello! I'm just a program, but I'm here and ready to help you.
-How can I assist you today?
+26.8467
+80.9462
 ```
 
 ---
 
-## Example 2: Multiple Independent Prompts
+# Step 2: Retrieve Weather Information
 
-In this example, each request is sent separately.
+The weather data is fetched from Meteosource through RapidAPI.
 
 ```python
-import openai
-
-prompts = [
-    "hello, how are you?",
-    "i am a java developer ?",
-    "Tell me about me"
-]
-
-for prompt in prompts:
-    response = openai.ChatCompletion.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.7,
-        max_tokens=45
-    )
-
-    print("Prompt:", prompt)
-    print("Response:", response["choices"][0]["message"]["content"])
-    print("-" * 50)
+def get_current_weather(city):
 ```
 
-### Observation
+This function:
 
-Each API call is independent.
+- Finds latitude and longitude
+- Calls the weather API
+- Returns JSON weather data
 
-The model does not remember previous prompts because conversation history is not provided.
+---
+
+# Function Definition
+
+The model is provided with a tool definition describing the weather function.
+
+```python
+functions = [
+    {
+        "name": "get_current_weather",
+        "description": "Get the current weather in a given location",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "The city to get weather for"
+                }
+            },
+            "required": ["city"]
+        }
+    }
+]
+```
+
+---
+
+# User Query
+
+```python
+user_message = "What is the weather in Lucknow?"
+```
+
+Messages list:
+
+```python
+messages = [
+    {
+        "role": "user",
+        "content": user_message
+    }
+]
+```
+
+---
+
+# First OpenAI Call
+
+The model decides whether a function should be called.
+
+```python
+completion = openai.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=messages,
+    functions=functions,
+    function_call="auto"
+)
+```
+
+Example response:
+
+```json
+{
+  "function_call": {
+    "name": "get_current_weather",
+    "arguments": {
+      "city": "Lucknow"
+    }
+  }
+}
+```
+
+---
+
+# Extract Function Arguments
+
+```python
+response = completion.choices[0].message
+
+args = json.loads(
+    response.to_dict()["function_call"]["arguments"]
+)
+
+city = args["city"]
+```
+
+Output:
+
+```text
+Lucknow
+```
+
+---
+
+# Execute the Weather Function
+
+```python
+function_result = get_current_weather(city)
+```
+
+Example response:
+
+```json
+{
+   "temperature": 27.4,
+   "humidity": 88,
+   "summary": "Cloudy"
+}
+```
+
+---
+
+# Add Function Result To Conversation
+
+```python
+messages.append(response)
+
+messages.append({
+    "role": "function",
+    "name": "get_current_weather",
+    "content": json.dumps(function_result)
+})
+```
+
+At this point the model has access to:
+
+- Original user question
+- Requested function call
+- Weather API response
+
+---
+
+# Second OpenAI Call
+
+Generate a natural language answer.
+
+```python
+final_response = openai.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=messages,
+    functions=functions
+)
+```
+
+---
+
+# Final Response
 
 Example:
 
 ```text
-Prompt: Tell me about me
+The current weather in Lucknow is:
 
-Response:
-I don't have any personal information about you...
+• Condition: Cloudy
+• Temperature: 27.4°C
+• Feels Like: 31.8°C
+• Humidity: 88%
+• Wind Speed: 2.7 m/s
+• Pressure: 1009 hPa
+
+The weather is expected to remain predominantly cloudy throughout the day.
 ```
 
 ---
 
-## Example 3: Conversation Context
+# Understanding Function Calling
 
-In this example, previous messages are included in the request.
-
-```python
-response = openai.ChatCompletion.create(
-    model="gpt-4o-mini",
-    messages=[
-        {"role": "user", "content": "hello, how are you?"},
-        {"role": "user", "content": "I am a Java developer"},
-        {"role": "user", "content": "Tell me about me"}
-    ]
-)
-
-print(response["choices"][0]["message"]["content"])
-```
-
-### Sample Output
+Without Function Calling:
 
 ```text
-As a Java developer, you likely have experience with programming in Java,
-working with frameworks, APIs, databases, and enterprise applications...
+User --> Model
 ```
 
-### Observation
+The model can only use information from its training.
 
-The model can answer based on previous messages because the conversation history is included in the request.
-
----
-
-## Key Learning
-
-### Stateless Request
-
-```python
-messages=[
-    {"role": "user", "content": prompt}
-]
-```
-
-- No memory of previous requests
-- Every API call starts fresh
-- Suitable for independent questions
-
-### Stateful Conversation
-
-```python
-messages=[
-    {"role": "user", "content": "hello"},
-    {"role": "user", "content": "I am a Java developer"},
-    {"role": "user", "content": "Tell me about me"}
-]
-```
-
-- Previous messages provide context
-- The model can reference earlier information
-- Enables chatbot-style conversations
-
----
-
-## Project Structure
+With Function Calling:
 
 ```text
-project/
+User --> Model
+          |
+          V
+      Function
+          |
+          V
+      External API
+          |
+          V
+        Model
+          |
+          V
+       Response
+```
+
+Function Calling allows the model to:
+
+- Access real-time data
+- Query databases
+- Trigger business logic
+- Integrate with APIs
+- Perform calculations
+- Execute workflows
+
+---
+
+# Project Structure
+
+```text
+weather-assistant/
 │
 ├── .env
-├── main.py
+├── weather_assistant.py
 ├── requirements.txt
 └── README.md
 ```
 
-## requirements.txt
+---
+
+# requirements.txt
 
 ```text
 openai
 python-dotenv
-pandas
-prompt_toolkit
+requests
 ```
 
-## Conclusion
+---
 
-This project demonstrates an important concept when working with Large Language Models:
+# Sample Execution
 
-- The model does not automatically remember previous API calls.
-- Context must be explicitly passed through the `messages` parameter.
-- Building conversational applications requires maintaining and sending chat history with every request.
+```text
+User:
+What is the weather in Lucknow?
+
+Model:
+Function Requested:
+get_current_weather(city="Lucknow")
+
+Weather API:
+Returned weather data
+
+Assistant:
+The current weather in Lucknow is cloudy with a temperature of 27.4°C and humidity of 88%.
+```
+
+---
+
+# Key Concepts Learned
+
+✅ OpenAI Function Calling
+
+✅ External API Integration
+
+✅ Weather Data Retrieval
+
+✅ Conversation Context Management
+
+✅ JSON Argument Parsing
+
+✅ Multi-step AI Workflows
+
+✅ Tool-Augmented LLM Applications
+
+---
+
+# Security Notes
+
+### Never Hardcode API Keys
+
+Avoid:
+
+```python
+headers = {
+    "x-rapidapi-key": "YOUR_API_KEY"
+}
+```
+
+Instead:
+
+```python
+RAPID_API_KEY = os.getenv("RAPID_API_KEY")
+```
+
+Store secrets inside:
+
+```env
+OPENAI_API_KEY=xxxx
+RAPID_API_KEY=xxxx
+```
+
+### Do Not Commit Secrets
+
+Add a `.gitignore` file:
+
+```gitignore
+.env
+__pycache__/
+```
+
+---
+
+# Conclusion
+
+This project demonstrates a practical implementation of OpenAI Function Calling. Instead of relying solely on the model's knowledge, the assistant dynamically invokes external weather services, retrieves live weather information, and produces an intelligent, human-readable response.
+
+This pattern forms the foundation of modern AI agents capable of interacting with APIs, databases, enterprise systems, and real-world services.
+``
